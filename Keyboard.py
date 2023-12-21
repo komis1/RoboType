@@ -4,6 +4,7 @@ from rtree import index
 import math
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+import re
 
 class Keyboard:
 
@@ -12,11 +13,16 @@ class Keyboard:
     usedecoder = False
     decoderdisabled = False
     decoderbuffer = []
+    
     xdim=0
     ydim=0
     maxdist=0
     xdim_phys=0
     ydim_phys=0
+    outputbuffer = []
+    current_word = []
+  
+    
 
     def __init__(self, kfile, lmfile, tmfile, dims_px, dims_mm, usedecoder=False, decoderngrams=4):
         self.xdim=dims_px[0]
@@ -72,7 +78,14 @@ class Keyboard:
 
                 #if letters[0]==' ': #clear the buffer on space
                 #    self.decoderbuffer=[]
-
+                
+            #if len(letters[0])==1: #not a special key
+            #    self.current_word.append[letters[0]]
+            #    if re.search("[\s\p{P}]"g,letters[0]): 
+            #        #is a space or word terminator, commit the word
+            #        self.current_word=[]
+            #        self.outputbuffer+=self.current_word
+                    
             return(letters[0])
         else:
             return('none')
@@ -83,11 +96,11 @@ class Keyboard:
         mytree = ET.parse(file)
         myroot = mytree.getroot()
 
-        kw = int(myroot.attrib['keyWidth'].split("%")[0])*xdim/100
-        kh = int(myroot.attrib['keyHeight'].split("%")[0])*ydim/100
+        kw = round(float(myroot.attrib['keyWidth'].split("%")[0])*xdim/100)
+        kh = round(float(myroot.attrib['keyHeight'].split("%")[0]))*ydim/100
 
-        hkeygap = int(myroot.attrib['horizontalGap'].split("%")[0])*xdim/100
-        vkeygap = int(myroot.attrib['verticalGap'].split("%")[0])*ydim/100
+        hkeygap = round(float(myroot.attrib['horizontalGap'].split("%")[0])*xdim/100)
+        vkeygap = round(float(myroot.attrib['verticalGap'].split("%")[0])*ydim/100)
 
         actualkh = kh-vkeygap
 
@@ -111,14 +124,14 @@ class Keyboard:
                 actualw = 0
 
                 if 'keyWidth' in child.attrib: #special key
-                    actualw=int(child.attrib['keyWidth'].split("%")[0])*xdim/100
+                    actualw=round(float(child.attrib['keyWidth'].split("%")[0])*xdim/100)
                 else:
                     actualw=kw
 
                 actualw = actualw-hkeygap
 
                 if 'horizontalGap' in child.attrib:
-                    extragap=int(child.attrib['horizontalGap'].split("%")[0])*xdim/100
+                    extragap=round(float(child.attrib['horizontalGap'].split("%")[0])*xdim/100)
 
                 if keycount==0:
                     center[0] = extragap+hkeygap/2+actualw/2

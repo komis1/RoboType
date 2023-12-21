@@ -3,6 +3,7 @@ import json
 import numpy as np
 import math
 import random
+from metrics import *
 
 class Finger:
 
@@ -59,7 +60,7 @@ class Finger:
 
     ### creates a tap on the screen targeting a specific letter,
     ### returns which letter was actually pressed
-    def moveFingerKinematic(self, target, keyboard, speed_factor):
+    def moveFingerKinematic(self, target, keyboard, speed_factor, slides='on'):
         #finger lands with 2 distributions: 1) inherent imprecision of motor system and 2) based on user speed
         #resulting in ffits law 10.1145/2470654.2466180
 
@@ -77,11 +78,11 @@ class Finger:
         outcome = {}
 
         targetx = keyboard.keylist[target]['center'][0]
-        targety = keyboard.keylist[target]['center'][1]
+        targety = round(keyboard.keylist[target]['center'][1]+keyboard.keylist[target]['ylen']*0.2)
 
         #jitter based on motor system
         xrange = round(keyboard.keylist[target]['xlen']*self.motor_system_stdev_factor)
-        yrange = round(keyboard.keylist[target]['ylen']*self.motor_system_stdev_factor)
+        yrange = round((keyboard.keylist[target]['ylen']/4)*self.motor_system_stdev_factor)
 
         xjitter = round(rng.normal(0, xrange, 1)[0]) #mean = 0, sigma = xrange (keylen/factor)
         yjitter = round(rng.normal(0, yrange, 1)[0])
@@ -118,28 +119,31 @@ class Finger:
         if targety>keyboard.ydim:
             targety=keyboard.ydim
 
+        if slides=='on':
+            #random percentage slide of motionlength, capped at 14 pixels
+            slidepct = rng.chisquare(np.mean(self.slideavgs[targetletter]),1)[0]
+            if slidepct>14:
+                slidepct=14
 
-        #random percentage slide of motionlength, capped at 14 pixels
-        slidepct = rng.chisquare(np.mean(self.slideavgs[targetletter]),1)[0]
-        if slidepct>14:
-            slidepct=14
+            costheta = (targetx-self.position[0])/motionlength
+            sintheta = (targety-self.position[1])/motionlength
 
-        costheta = (targetx-self.position[0])/motionlength
-        sintheta = (targety-self.position[1])/motionlength
+            slidex = round(targetx + slidepct*costheta)
+            slidey = round(targety + slidepct*sintheta)
 
-        slidex = round(targetx + slidepct*costheta)
-        slidey = round(targety + slidepct*sintheta)
-
-        #limit touch slides to physical bounds (left, right, bottom)
-        if slidex<0:
-            slidex=0
-        if slidex>keyboard.xdim:
-            slidex=keyboard.xdim
-        if slidey>keyboard.ydim:
-            slidey=keyboard.ydim
+            #limit touch slides to physical bounds (left, right, bottom)
+            if slidex<0:
+                slidex=0
+            if slidex>keyboard.xdim:
+                slidex=keyboard.xdim
+            if slidey>keyboard.ydim:
+                slidey=keyboard.ydim
 
 
-        self.position=[slidex, slidey]
+            self.position=[slidex, slidey]
+        
+        else:
+            self.position=[targetx, targety]
 
         outcome['letter']=keyboard.outputLetter(self.position)
         outcome['intent']=targetletter
@@ -162,6 +166,8 @@ class Finger:
     def typeSentence(self, keyboard, sentence, speed):
         #reset to keyboard center at start
         self.position=[round(keyboard.xdim/2),round(keyboard.ydim/2) ]
+        #reset keyboard buffer
+        keyboard.outputbuffer =[]
         dist = 0
         taps = []
         intended = []
@@ -171,46 +177,76 @@ class Finger:
         return taps
 
     ## type a key and attempt to correct errors, if they occur
-    def typeKeyWithCorrection(self, keyboard, target, speed):
-
+    def typeKeyWithCorrection(self, keyboard, target, speed, noticeprob, slides):
+        #orig_notice_prob=noticeprob
         attempts=[]
         hit = False
         while(hit==False):
+            #try to hit the key
             attempt = self.moveFingerKinematic(target, keyboard, speed)
             attempts.append(attempt)
+            
+            #if error made
             if attempt['letter']!=attempt['intent']:
-                #check that it wasn't a non-functional key (shift, none), and try to delete it
-                #special case is if you want to press a letter (eg l,m,p) and instead hit delete
-                    #in this case we have to repeat the previous input
-                if attempt['letter'] not in ['none','shift', '123', 'return', 'done', 'delete']:
-                    delpressed = False
-                    while (delpressed == False):
-                        if keyboard.usedecoder:
-                            keyboard.usedecoder=False #deactivate decoder otherwise we will be forever stuck
-                            keyboard.decoderdisabled=True
-                        delattempt = self.moveFingerKinematic('delete', keyboard, speed)
-                        attempts.append(delattempt)
-                        if delattempt['letter']!=delattempt['intent']:
-                            moreattempts = self.typeKeyWithCorrection(keyboard, 'delete', speed)
-                        else:
-                            delpressed = True
-                            if keyboard.decoderdisabled:
-                                decoderdisabled=False
-                                keyboard.usedecoder=True
-                else: #otherwise, try to press it again
-                    hit=False
+                
+                #calculate probability of noticing the error
+                rng = np.random.default_rng()
+                prob=rng.random()
+                
+                
+                #if noticed, proceed to correct
+                if prob<noticeprob:
+                    #print("noticed! np=",noticeprob," prob=", prob, "pressed", attempt['letter']," wanted ",attempt['intent'])
+                    #check that it wasn't a non-functional key (shift, none), and try to delete it
+                    #special case is if you want to press a letter (eg l,m,p) and instead hit delete
+                        #in this case we have to repeat the previous input
+                    if attempt['letter'] not in ['none','shift', '123', 'return', 'done', 'delete','language']:
+                        delpressed = False
+                        while (delpressed == False):
+                            if keyboard.usedecoder:
+                                keyboard.usedecoder=False #deactivate decoder otherwise we will be forever stuck
+                                keyboard.decoderdisabled=True
+                            delattempt = self.moveFingerKinematic('delete', keyboard, speed, slides=slides)
+                            attempts.append(delattempt)
+                            if delattempt['letter']!=delattempt['intent']: #didn't hit del successfully
+                                #now be super careful since we know we already made a mistake before
+                                moreattempts = self.typeKeyWithCorrection(keyboard, 'delete', speed, noticeprob=1.0, slides=slides)
+                            else:
+                                delpressed = True
+                                if len(keyboard.outputbuffer)!=0:
+                                    keyboard.outputbuffer.pop()
+                                if keyboard.decoderdisabled:
+                                    decoderdisabled=False
+                                    keyboard.usedecoder=True
+                    else: #it was a non-func, non-del key, try to press it again
+                        hit=False
+                        #now be super careful since we know we already made a mistake before
+                        noticeprob=1.0
+                else: #not noticed
+                    #print("unnoticed! np=",noticeprob," prob=", prob, "pressed", attempt['letter']," wanted ",attempt['intent'])
+                    hit=True
+                    if attempt['letter'] not in ['none','shift', '123', 'return', 'done', 'delete','language']:
+                        keyboard.outputbuffer.append(attempt['letter'])
             else:
                 hit=True
+                keyboard.outputbuffer.append(attempt['letter'])
+                
         return attempts
 
     ## type a sentence and attempt to correct errors, if they occur
-    def typeSentenceWithCorrection(self, keyboard, sentence, speed):
+    def typeSentenceWithCorrection(self, keyboard, sentence, speed, noticeprob, slides='on'):
         #reset to keyboard center at start
         self.position=[round(keyboard.xdim/2),round(keyboard.ydim/2) ]
-        keyboard.buffer=[] #clear kb buffer
+        #reset keyboard buffer
+        keyboard.outputbuffer = []
         dist = 0
         taps = []
         intended = []
         for i in range(len(sentence)):
-            taps.extend(self.typeKeyWithCorrection(keyboard,sentence[i],speed))
-        return taps
+            taps.extend(self.typeKeyWithCorrection(keyboard,sentence[i],speed, noticeprob, slides))
+            
+        return {"sentence": sentence,
+                "output": "".join(keyboard.outputbuffer), 
+                "wpm": wpm(taps),
+                "kspc": kspc(taps, sentence),
+                "taps": taps}
